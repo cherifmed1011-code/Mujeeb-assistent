@@ -1,0 +1,22 @@
+{
+  "name": "mujeeb-backend",
+  "version": "1.0.0",
+  "description": "Backend service for Mujeeb AI assistant to handle WhatsApp messages via Twilio API.",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "dotenv": "^16.3.1",
+    "body-parser": "^1.20.2",
+    "axios": "^1.4.0",
+    "twilio": "^4.19.0",
+    "cors": "^2.8.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  }
+}
