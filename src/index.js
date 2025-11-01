@@ -1,54 +1,73 @@
 import express from "express";
+import dotenv from "dotenv";
 import bodyParser from "body-parser";
 import axios from "axios";
-import dotenv from "dotenv";
-import cors from "cors";
 import twilio from "twilio";
+import cors from "cors";
 
 dotenv.config();
 
 const app = express();
-const port = process.env.PORT || 5000;
-
 app.use(cors());
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
-// إعداد Twilio
-const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+const PORT = process.env.PORT || 10000;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
+const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
 
-// استقبال الرسائل من واتساب
-app.post("/webhook", async (req, res) => {
-  const messageBody = req.body.Body?.trim();
-  const from = req.body.From;
+const client = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
 
-  console.log("📩 رسالة جديدة من:", from, "المحتوى:", messageBody);
+// ✅ اختبار جاهزية السيرفر
+app.get("/", (req, res) => {
+  res.json({ status: "✅ Mujeeb backend is running with Gemini!" });
+});
 
-  let reply = "👋 أهلاً! أنا مساعد مجيب الذكي. كيف يمكنني مساعدتك اليوم؟";
-
-  if (messageBody?.toLowerCase().includes("مرحبا")) {
-    reply = "أهلاً وسهلاً! كيف حالك اليوم؟ 😊";
-  } else if (messageBody?.toLowerCase().includes("اسمك")) {
-    reply = "اسمي مجيب 🤖، مساعد ذكي من شركة M.M.S!";
-  }
-
+// 📩 استقبال رسائل واتساب من Twilio
+app.post("/twilio/whatsapp/webhook", async (req, res) => {
   try {
+    const messageBody = req.body.Body || "";
+    const from = req.body.From || "";
+
+    console.log("📨 رسالة جديدة من:", from, "المحتوى:", messageBody);
+
+    // 🔹 إرسال الرسالة إلى Gemini API
+    const geminiResponse = await axios.post(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
+      {
+        contents: [
+          {
+            parts: [{ text: `رد على المستخدم بطريقة لبقة وواضحة: ${messageBody}` }],
+          },
+        ],
+      },
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": GEMINI_API_KEY,
+        },
+      }
+    );
+
+    const reply =
+      geminiResponse.data?.candidates?.[0]?.content?.parts?.[0]?.text ||
+      "عذرًا، لم أستطع فهم رسالتك.";
+
+    // 🔹 إرسال الرد إلى واتساب عبر Twilio
     await client.messages.create({
-      from: "whatsapp:+14155238886", // رقم Twilio Sandbox
+      from: "whatsapp:+14155238886", // رقم Sandbox من Twilio
       to: from,
       body: reply,
     });
 
-    console.log("✅ تم إرسال الرد إلى:", from);
+    res.sendStatus(200);
   } catch (error) {
-    console.error("❌ خطأ في إرسال الرد:", error);
+    console.error("❌ خطأ في معالجة الرسالة:", error.message);
+    res.sendStatus(500);
   }
-
-  res.sendStatus(200);
 });
 
-app.get("/", (req, res) => {
-  res.send("🚀 Mujeeb backend is running successfully!");
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`🚀 Mujeeb server is running on port ${PORT}`);
 });
-
-app.listen(port, () => console.log(`✅ Server running on port ${port}`));
