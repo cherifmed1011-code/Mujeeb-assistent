@@ -24,7 +24,7 @@ app.get("/", (req, res) => {
   res.json({ status: "✅ Mujeeb backend is running with Gemini!" });
 });
 
-// 📩 استقبال رسائل واتساب من Twilio
+// ✅ استقبال رسائل واتساب من Twilio
 app.post("/twilio/whatsapp/webhook", async (req, res) => {
   try {
     const messageBody = req.body.Body || "";
@@ -32,7 +32,17 @@ app.post("/twilio/whatsapp/webhook", async (req, res) => {
 
     console.log("📨 رسالة جديدة من:", from, "المحتوى:", messageBody);
 
-    // 🔹 إرسال الرسالة إلى Gemini API
+    // ✅ رد بسيط للاختبار قبل استخدام Gemini
+    if (messageBody.toLowerCase().includes("test")) {
+      await client.messages.create({
+        from: "whatsapp:+14155238886",
+        to: from,
+        body: "تم استلام الرسالة بنجاح ✅",
+      });
+      return res.sendStatus(200);
+    }
+
+    // ✅ إرسال الرسالة إلى Gemini API
     const geminiResponse = await axios.post(
       "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
       {
@@ -54,9 +64,9 @@ app.post("/twilio/whatsapp/webhook", async (req, res) => {
       geminiResponse.data?.candidates?.[0]?.content?.parts?.[0]?.text ||
       "عذرًا، لم أستطع فهم رسالتك.";
 
-    // 🔹 إرسال الرد إلى واتساب عبر Twilio
+    // ✅ إرسال الرد إلى واتساب عبر Twilio
     await client.messages.create({
-      from: "whatsapp:+14155238886", // رقم Sandbox من Twilio
+      from: "whatsapp:+14155238886",
       to: from,
       body: reply,
     });
