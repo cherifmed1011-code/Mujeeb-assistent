@@ -7,24 +7,24 @@ import cors from "cors";
 
 dotenv.config();
 
+// التحقق من متغيرات البيئة
+if (!process.env.GEMINI_API_KEY || !process.env.TWILIO_AUTH_TOKEN || !process.env.TWILIO_ACCOUNT_SID) {
+  console.error("❌ خطأ: متغيرات البيئة مفقودة!");
+  process.exit(1);
+}
+
 const app = express();
 app.use(cors());
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
 const PORT = process.env.PORT || 10000;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
-const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
+const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
-const client = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
-
-// ✅ اختبار جاهزية السيرفر
 app.get("/", (req, res) => {
   res.json({ status: "✅ Mujeeb backend is running with Gemini!" });
 });
 
-// ✅ استقبال رسائل واتساب من Twilio
 app.post("/twilio/whatsapp/webhook", async (req, res) => {
   try {
     console.log("📩 Webhook data:", req.body);
@@ -39,7 +39,7 @@ app.post("/twilio/whatsapp/webhook", async (req, res) => {
 
     console.log("📨 رسالة جديدة من:", from, "المحتوى:", messageBody);
 
-    // 🔹 اختبار سريع
+    // رد الاختبار
     if (messageBody.toLowerCase().includes("test")) {
       await client.messages.create({
         from: "whatsapp:+14155238886",
@@ -49,34 +49,54 @@ app.post("/twilio/whatsapp/webhook", async (req, res) => {
       return res.sendStatus(200);
     }
 
-    // 🔹 طلب Gemini API
+    // طلب Gemini API
+    const prompt = `أنت مساعد ذكي يتحدث العربية. 
+المستخدم يقول: "${messageBody}"
+رد بطريقة مفيدة وودودة ومناسبة للغة العربية.`;
+
     const geminiResponse = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${process.env.GEMINI_API_KEY}`,
       {
         contents: [
           {
-            parts: [{ text: `رد على المستخدم بطريقة لبقة وواضحة: ${messageBody}` }],
+            parts: [{ text: prompt }],
           },
         ],
       },
-      { headers: { "Content-Type": "application/json" } }
+      { 
+        headers: { "Content-Type": "application/json" },
+        timeout: 30000 // 30 ثانية timeout
+      }
     );
 
     const reply =
       geminiResponse.data?.candidates?.[0]?.content?.parts?.[0]?.text ||
-      "عذرًا، لم أستطع فهم رسالتك.";
+      "عذرًا، لم أستطع فهم رسالتك. الرجاء المحاولة مرة أخرى.";
 
-    // 🔹 إرسال الرد إلى واتساب
+    // إرسال الرد
     await client.messages.create({
       from: "whatsapp:+14155238886",
       to: from,
-      body: reply,
+      body: reply.substring(0, 1600), // تقليل النص إذا كان طويلاً
     });
 
-    console.log("✅ تم إرسال الرد:", reply);
+    console.log("✅ تم إرسال الرد بنجاح");
     res.sendStatus(200);
+
   } catch (error) {
-    console.error("❌ خطأ في معالجة الرسالة:", error.response?.data || error.message);
+    console.error("❌ خطأ في معالجة الرسالة:", error);
+    
+    // إرسال رسالة خطأ للمستخدم
+    try {
+      await client.messages.create({
+        from: "whatsapp:+14155238886", 
+        to: req.body.From,
+        body: "⚠️ عذرًا، حدث خطأ في النظام. الرجاء المحاولة لاحقًا.",
+      });
+    } catch (twilioError) {
+      console.error("❌ فشل إرسال رسالة الخطأ:", twilioError);
+    }
+    
     res.sendStatus(500);
   }
 });
