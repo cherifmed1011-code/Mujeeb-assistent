@@ -27,24 +27,31 @@ app.get("/", (req, res) => {
 // ✅ استقبال رسائل واتساب من Twilio
 app.post("/twilio/whatsapp/webhook", async (req, res) => {
   try {
-    const messageBody = req.body.Body || "";
-    const from = req.body.From || "";
+    console.log("📩 Webhook data:", req.body);
+
+    const messageBody = req.body.Body;
+    const from = req.body.From;
+
+    if (!messageBody || !from) {
+      console.error("⚠️ خطأ: لم يتم استلام Body أو From من Twilio!");
+      return res.sendStatus(400);
+    }
 
     console.log("📨 رسالة جديدة من:", from, "المحتوى:", messageBody);
 
-    // ✅ رد بسيط للاختبار قبل استخدام Gemini
+    // 🔹 اختبار سريع
     if (messageBody.toLowerCase().includes("test")) {
       await client.messages.create({
         from: "whatsapp:+14155238886",
         to: from,
-        body: "تم استلام الرسالة بنجاح ✅",
+        body: "✅ تم استلام رسالتك، السيرفر يعمل بنجاح!",
       });
       return res.sendStatus(200);
     }
 
-    // ✅ إرسال الرسالة إلى Gemini API
+    // 🔹 طلب Gemini API
     const geminiResponse = await axios.post(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
+      `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
       {
         contents: [
           {
@@ -52,28 +59,24 @@ app.post("/twilio/whatsapp/webhook", async (req, res) => {
           },
         ],
       },
-      {
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": GEMINI_API_KEY,
-        },
-      }
+      { headers: { "Content-Type": "application/json" } }
     );
 
     const reply =
       geminiResponse.data?.candidates?.[0]?.content?.parts?.[0]?.text ||
       "عذرًا، لم أستطع فهم رسالتك.";
 
-    // ✅ إرسال الرد إلى واتساب عبر Twilio
+    // 🔹 إرسال الرد إلى واتساب
     await client.messages.create({
       from: "whatsapp:+14155238886",
       to: from,
       body: reply,
     });
 
+    console.log("✅ تم إرسال الرد:", reply);
     res.sendStatus(200);
   } catch (error) {
-    console.error("❌ خطأ في معالجة الرسالة:", error.message);
+    console.error("❌ خطأ في معالجة الرسالة:", error.response?.data || error.message);
     res.sendStatus(500);
   }
 });
