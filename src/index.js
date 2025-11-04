@@ -50,19 +50,14 @@ app.post("/twilio/whatsapp/webhook", async (req, res) => {
     const groqResponse = await axios.post(
       "https://api.groq.com/openai/v1/chat/completions",
       {
-        model: "llama-3.1-8b-instant", // يمكنك تغييره إلى llama3-70b إذا أردت أداء أقوى
+        model: "llama-3.1-8b-instant", // يمكنك تغييره لاحقًا
         messages: [
           {
             role: "system",
-            content:"{"
-  أنت "مجيب" — مساعد ذكي موريتاني محترم.
-  تتحدث فقط بالعربية الفصحى البسيطة.
-  لا تستخدم أي كلمة أجنبية أو لغة أخرى إطلاقًا.
-  ردودك مختصرة، واضحة، وودية.
-  `
-          }
-           .
-      `.",
+            content: `أنت "مجيب" — مساعد ذكي موريتاني محترم.
+تتحدث فقط بالعربية الفصحى البسيطة.
+لا تستخدم أي كلمة أجنبية أو لغة أخرى إطلاقًا.
+ردودك مختصرة، واضحة، وودية.`,
           },
           { role: "user", content: messageBody },
         ],
