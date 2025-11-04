@@ -17,89 +17,128 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
 
+if (!GROQ_API_KEY || !TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN) {
+  console.error("❌ خطأ: متغيرات البيئة مفقودة (GROQ_API_KEY / TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN).");
+  process.exit(1);
+}
+
 const client = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
 
+function sanitizeReply(text) {
+  if (!text) return "";
+  // إزالة مسافات زائدة وأسطر جديدة
+  let r = text.toString().trim().replace(/\s+/g, " ");
+  // إزالة علامات اقتباس أو تحويرات غير مرغوبة في البداية/النهاية
+  r = r.replace(/^["'`]+|["'`]+$/g, "").trim();
+  return r;
+}
+
+function isBadReply(r) {
+  if (!r) return true;
+  const short = r.replace(/[^\p{L}\p{N}]/gu, "").toLowerCase();
+  // كلمات قصيرة/غير مفيدة نرفضها
+  const bad = ["ok", "okay", "تمام", "حسنا", "حسناً", "جيب", "yes", "no"];
+  if (short.length <= 2) return true;
+  if (bad.includes(short)) return true;
+  return false;
+}
+
 app.get("/", (req, res) => {
-  res.json({ status: "✅ Mujeeb backend is running with GROQ AI!" });
+  res.json({ status: "✅ Mujeeb backend is running (GROQ)!" });
 });
 
 app.post("/twilio/whatsapp/webhook", async (req, res) => {
   try {
     console.log("📩 Webhook data:", req.body);
-    const messageBody = req.body.Body;
-    const from = req.body.From;
+    const messageBody = (req.body.Body || req.body.body || "").toString();
+    const from = req.body.From || req.body.from;
 
     if (!messageBody || !from) {
-      console.error("⚠️ خطأ: لم يتم استلام Body أو From من Twilio!");
+      console.error("⚠️ لم يصل Body أو From من Twilio");
       return res.sendStatus(400);
     }
 
     console.log("📨 رسالة جديدة من:", from, "المحتوى:", messageBody);
 
-    // 🔹 رد اختبار
-    if (messageBody.toLowerCase().includes("test")) {
+    // رد اختبار سريع (لن يرسل "OK")
+    if (messageBody.trim().toLowerCase().includes("test")) {
       await client.messages.create({
         from: "whatsapp:+14155238886",
         to: from,
-        body: "✅ تم استلام رسالتك! السيرفر يعمل بنجاح (GROQ).",
+        body: "✅ تم استلام رسالتك، السيرفر يعمل بنجاح!",
       });
       return res.sendStatus(200);
     }
 
-    // 🔹 معالجة الطلب بواسطة GROQ API
-    const groqResponse = await axios.post(
+    // إعداد الـ system prompt باللغة العربية بشكل واضح
+    const systemPrompt = [
+      {
+        role: "system",
+        content:
+          "أنت مجيب — مساعد ذكي موريتاني. تحدث بالعربية الفصحى البسيطة فقط. " +
+          "كن ودودًا، مختصرًا، ومباشرًا. لا ترسل كلمات مفردة غير مفيدة مثل 'OK' أو 'تمام'. " +
+          "إذا سأل المستخدم سؤالًا عامًا قدم إجابة دقيقة وواضحة."
+      },
+      { role: "user", content: messageBody }
+    ];
+
+    // استدعاء GROQ / OpenAI-compatible endpoint
+    const groqResp = await axios.post(
       "https://api.groq.com/openai/v1/chat/completions",
       {
-        model: "llama-3.1-8b-instant", // يمكنك تغييره لاحقًا
-        messages: [
-          {
-            role: "system",
-            content: `أنت "مجيب" — مساعد ذكي موريتاني محترم.
-تتحدث فقط بالعربية الفصحى البسيطة.
-لا تستخدم أي كلمة أجنبية أو لغة أخرى إطلاقًا.
-ردودك مختصرة، واضحة، وودية.`,
-          },
-          { role: "user", content: messageBody },
-        ],
+        model: "llama-3.1-8b-instant", // غيّر إذا تحتاج نموذج آخر متاح في حسابك
+        messages: systemPrompt,
+        max_tokens: 512,
+        temperature: 0.2
       },
       {
         headers: {
-          "Authorization": `Bearer ${GROQ_API_KEY}`,
-          "Content-Type": "application/json",
+          Authorization: `Bearer ${GROQ_API_KEY}`,
+          "Content-Type": "application/json"
         },
+        timeout: 30000
       }
     );
 
-    const reply =
-      groqResponse.data?.choices?.[0]?.message?.content ||
-      "عذرًا، لم أستطع فهم رسالتك.";
+    // استخراج النص من استجابة الـ API (تأكد من شكل استجابة Groq لديك)
+    const aiContent =
+      groqResp.data?.choices?.[0]?.message?.content ||
+      groqResp.data?.choices?.[0]?.text ||
+      "";
 
+    let reply = sanitizeReply(aiContent);
+    if (isBadReply(reply)) {
+      console.warn("⚠️ الرد غير مقبول من AI أو قصير جداً، سيتم استخدام رد احتياطي.");
+      reply = "عذرًا، لم أتمكن من توليد رد مناسب الآن. هل يمكنك إعادة صياغة السؤال؟";
+    }
+
+    // إرسال الرد عبر Twilio
     await client.messages.create({
       from: "whatsapp:+14155238886",
       to: from,
-      body: reply.substring(0, 1600),
+      body: reply.substring(0, 1600)
     });
 
     console.log("✅ تم إرسال الرد:", reply);
-    res.sendStatus(200);
-
-  } catch (error) {
-    console.error("❌ خطأ في المعالجة:", error.response?.data || error.message);
-
+    return res.sendStatus(200);
+  } catch (err) {
+    console.error("❌ خطأ في المعالجة:", err.response?.data || err.message || err);
+    // إرسال رسالة عامة للمستخدم إن أمكن
     try {
-      await client.messages.create({
-        from: "whatsapp:+14155238886",
-        to: req.body.From,
-        body: "⚠️ حدث خطأ في النظام. الرجاء المحاولة لاحقًا.",
-      });
-    } catch (twilioError) {
-      console.error("❌ فشل إرسال رسالة الخطأ:", twilioError);
+      if (req.body?.From) {
+        await client.messages.create({
+          from: "whatsapp:+14155238886",
+          to: req.body.From,
+          body: "⚠️ عذرًا، واجهنا مشكلة تقنية مؤقتة. الرجاء المحاولة لاحقًا."
+        });
+      }
+    } catch (twErr) {
+      console.error("❌ خطأ أثناء محاولة إرسال رسالة الخطأ:", twErr);
     }
-
-    res.sendStatus(500);
+    return res.sendStatus(500);
   }
 });
 
-app.listen(PORT, "0.0.0.0", () =>
-  console.log(`🚀 Mujeeb server is running on port ${PORT}`)
-);
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`🚀 Mujeeb server is running on port ${PORT}`);
+});
