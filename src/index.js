@@ -58,7 +58,13 @@ async function askGroq(message) {
 }
 
 // 📨 استقبال رسائل واتساب من Twilio
+
+
+  res.sendStatus(200);
+});
 app.post("/webhook", async (req, res) => {
+  res.sendStatus(200); // رد سريع لتويليو
+
   const from = req.body.From;
   const body = req.body.Body;
 
@@ -70,12 +76,9 @@ app.post("/webhook", async (req, res) => {
   await twilioClient.messages.create({
     from: "whatsapp:+14155238886",
     to: from,
-    body: reply,
+    body: reply
   });
-
-  res.sendStatus(200);
 });
-
 // 🚀 تشغيل السيرفر
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`🚀 Mujeeb server is running on port ${PORT}`));
