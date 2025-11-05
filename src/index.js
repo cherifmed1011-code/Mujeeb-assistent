@@ -1,7 +1,6 @@
 import express from "express";
 import bodyParser from "body-parser";
 import twilio from "twilio";
-import fetch from "node-fetch";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -10,43 +9,47 @@ const app = express();
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
-// بيانات البيئة
+// ✅ استخدام fetch المدمج في Node.js (بدون node-fetch)
+const fetch = global.fetch;
+
+// 🔑 مفاتيح البيئة
 const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
-// 🧠 تعريف شخصية مجيب
+// 🧠 تعريف شخصية "مجيب"
 const SYSTEM_PROMPT = `
 أنت "مجيب" — مساعد ذكي موريتاني محترم.
-تتحدث العربية الفصحى البسيطة.
-تكون مختصرًا وواضحًا وترد فقط على حسب السؤال بدون أي إضافات زائدة.
-إذا كان السؤال خارج النطاق أو غير مفهوم، قل بأدب أنك لم تفهم.
+تتحدث العربية الفصحى البسيطة فقط.
+تكون مختصرًا وواضحًا جدًا.
+لا تستخدم كلمات أجنبية أو رموز.
+إذا لم تفهم السؤال، قل بأدب: "لم أفهم سؤالك جيدًا، هل يمكنك التوضيح؟"
 `;
 
-// 🎯 دالة للتحدث مع GROQ API
+// 🎯 وظيفة الاتصال بـ GROQ API
 async function askGroq(message) {
   try {
     const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${GROQ_API_KEY}`,
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "llama-3.1-70b-versatile",
+        model: "llama-3.1-70b-versatile", // نموذج قوي من GROQ
         messages: [
           { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: message }
-        ]
-      })
+          { role: "user", content: message },
+        ],
+      }),
     });
 
     const data = await response.json();
 
-    if (data.choices && data.choices[0]?.message?.content) {
+    if (data?.choices?.[0]?.message?.content) {
       return data.choices[0].message.content.trim();
     } else {
       console.error("❌ خطأ من GROQ:", data);
-      return "عذرًا، حدث خلل مؤقت في النظام.";
+      return "عذرًا، حدث خطأ مؤقت في النظام.";
     }
   } catch (error) {
     console.error("❌ فشل الاتصال بـ GROQ:", error);
@@ -54,7 +57,7 @@ async function askGroq(message) {
   }
 }
 
-// 📨 استقبال رسائل واتساب
+// 📨 استقبال رسائل واتساب من Twilio
 app.post("/webhook", async (req, res) => {
   const from = req.body.From;
   const body = req.body.Body;
@@ -67,7 +70,7 @@ app.post("/webhook", async (req, res) => {
   await twilioClient.messages.create({
     from: "whatsapp:+14155238886",
     to: from,
-    body: reply
+    body: reply,
   });
 
   res.sendStatus(200);
