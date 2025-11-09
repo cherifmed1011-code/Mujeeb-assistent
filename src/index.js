@@ -140,7 +140,26 @@ app.get("/status", (req, res) => {
     message: "Mujeeb is connected to Twilio Sandbox ✅"
   });
 });
+// ✅ Meta Webhook Verification (WhatsApp Cloud API)
+app.get("/webhook", (req, res) => {
+  const verifyToken = "mujeeb_test"; // نفس التوكن الذي تضعه في Meta
 
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+
+  if (mode && token) {
+    if (mode === "subscribe" && token === verifyToken) {
+      console.log("✅ Webhook verified successfully with Meta");
+      res.status(200).send(challenge);
+    } else {
+      console.warn("❌ Webhook verification failed. Invalid token.");
+      res.sendStatus(403);
+    }
+  } else {
+    res.sendStatus(400);
+  }
+});
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Mujeeb server is running on port ${PORT}`);
 });
