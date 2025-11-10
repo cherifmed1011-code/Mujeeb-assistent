@@ -140,6 +140,7 @@ app.get("/status", (req, res) => {
     message: "Mujeeb is connected to Twilio Sandbox ✅"
   });
 });
+
 // ✅ Meta Webhook Verification (WhatsApp Cloud API)
 app.get("/webhook", (req, res) => {
   const verifyToken = "mujeeb_test"; // نفس التوكن الذي تضعه في Meta
@@ -160,6 +161,14 @@ app.get("/webhook", (req, res) => {
     res.sendStatus(400);
   }
 });
+
+// ✅ استقبال الرسائل من Meta (POST Webhook)
+app.post("/webhook", (req, res) => {
+  console.log("📩 Webhook received from Meta:");
+  console.log(JSON.stringify(req.body, null, 2));
+  res.sendStatus(200); // ضروري ترجع 200 حتى لا يعتبره Meta فشل
+});
+
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Mujeeb server is running on port ${PORT}`);
 });
