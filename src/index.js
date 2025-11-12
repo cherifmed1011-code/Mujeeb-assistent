@@ -1,174 +1,240 @@
+// backend/src/index.js
 import express from "express";
 import dotenv from "dotenv";
 import bodyParser from "body-parser";
 import axios from "axios";
-import twilio from "twilio";
 import cors from "cors";
+import admin from "firebase-admin";
+import "./auth.js";
 
 dotenv.config();
-
 const app = express();
 app.use(cors());
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
 const PORT = process.env.PORT || 10000;
-const GROQ_API_KEY = process.env.GROQ_API_KEY;
-const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
-const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
+const META_APP_ID = process.env.META_APP_ID;
+const META_APP_SECRET = process.env.META_APP_SECRET;
+const REDIRECT_URI = process.env.REDIRECT_URI; // e.g. https://mujeeb-assistent.onrender.com/auth/callback
+const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID;
+const FIREBASE_CLIENT_EMAIL = process.env.FIREBASE_CLIENT_EMAIL;
+const FIREBASE_PRIVATE_KEY =
+  process.env.FIREBASE_PRIVATE_KEY &&
+  process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n");
 
-if (!GROQ_API_KEY || !TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN) {
-  console.error("❌ خطأ: متغيرات البيئة مفقودة (GROQ_API_KEY / TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN).");
-  process.exit(1);
+// --- (اختياري) تهيئة Firebase Admin لحفظ التوكنات ---
+let firestore = null;
+if (FIREBASE_PROJECT_ID && FIREBASE_CLIENT_EMAIL && FIREBASE_PRIVATE_KEY) {
+  admin.initializeApp({
+    credential: admin.credential.cert({
+      projectId: FIREBASE_PROJECT_ID,
+      clientEmail: FIREBASE_CLIENT_EMAIL,
+      privateKey: FIREBASE_PRIVATE_KEY,
+    }),
+  });
+  firestore = admin.firestore();
+  console.log("✅ Firestore initialized");
+} else {
+  console.log("⚠️ Firestore not configured — tokens won't be saved automatically.");
 }
 
-const client = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
-
-function sanitizeReply(text) {
-  if (!text) return "";
-  let r = text.toString().trim().replace(/\s+/g, " ");
-  r = r.replace(/^["'`]+|["'`]+$/g, "").trim();
-  return r;
+// helper to save credentials
+async function saveIntegration(uid, data) {
+  if (!firestore || !uid) return;
+  const ref = firestore
+    .collection("users")
+    .doc(uid)
+    .collection("integrations")
+    .doc("meta");
+  await ref.set(
+    { ...data, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+    { merge: true }
+  );
 }
 
-function isBadReply(r) {
-  if (!r) return true;
-  const short = r.replace(/[^\p{L}\p{N}]/gu, "").toLowerCase();
-  const bad = ["ok", "okay", "تمام", "حسنا", "حسناً", "جيب", "yes", "no"];
-  if (short.length <= 2) return true;
-  if (bad.includes(short)) return true;
-  return false;
-}
+// --- Routes ---
+// health
+app.get("/", (req, res) =>
+  res.json({ status: "✅ Mujeeb backend (OAuth) running" })
+);
 
-app.get("/", (req, res) => {
-  res.json({ status: "✅ Mujeeb backend is running (GROQ)!" });
+// Start OAuth flow
+// FRONTEND should call: GET /auth/start?uid=<USER_UID>
+app.get("/auth/start", (req, res) => {
+  const uid = req.query.uid || ""; // optional: link to your user
+  const state = uid; // we pass uid as state
+  const scope = encodeURIComponent(
+    "whatsapp_business_management,whatsapp_business_messaging,pages_show_list"
+  );
+  const redirect = encodeURIComponent(REDIRECT_URI);
+  const oauthUrl = `https://www.facebook.com/v16.0/dialog/oauth?client_id=${META_APP_ID}&redirect_uri=${redirect}&state=${encodeURIComponent(
+    state
+  )}&scope=${scope}&response_type=code`;
+
+  return res.redirect(oauthUrl);
 });
 
-app.post("/twilio/whatsapp/webhook", async (req, res) => {
+// OAuth callback
+app.get("/auth/callback", async (req, res) => {
   try {
-    console.log("📩 Webhook data:", req.body);
-    const messageBody = (req.body.Body || req.body.body || "").toString();
-    const from = req.body.From || req.body.from;
+    const code = req.query.code;
+    const state = req.query.state || ""; // user id passed from /auth/start
+    if (!code) return res.status(400).send("Missing code");
 
-    if (!messageBody || !from) {
-      console.error("⚠️ لم يصل Body أو From من Twilio");
-      return res.sendStatus(400);
-    }
+    // 1) Exchange code for short-lived token
+    const tokenExchangeUrl =
+      `https://graph.facebook.com/v16.0/oauth/access_token` +
+      `?client_id=${META_APP_ID}` +
+      `&client_secret=${META_APP_SECRET}` +
+      `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
+      `&code=${encodeURIComponent(code)}`;
 
-    console.log("📨 رسالة جديدة من:", from, "المحتوى:", messageBody);
+    const tokenRes = await axios.get(tokenExchangeUrl);
+    const shortLivedToken = tokenRes.data?.access_token;
+    if (!shortLivedToken) throw new Error("Failed to get access token");
 
-    if (messageBody.trim().toLowerCase().includes("test")) {
-      await client.messages.create({
-        from: "whatsapp:+14155238886",
-        to: from,
-        body: "✅ تم استلام رسالتك، السيرفر يعمل بنجاح!",
-      });
-      return res.sendStatus(200);
-    }
+    // 2) Exchange for long-lived token
+    const longLivedUrl =
+      `https://graph.facebook.com/v16.0/oauth/access_token` +
+      `?grant_type=fb_exchange_token&client_id=${META_APP_ID}` +
+      `&client_secret=${META_APP_SECRET}` +
+      `&fb_exchange_token=${encodeURIComponent(shortLivedToken)}`;
 
-    const systemPrompt = [
-      {
-        role: "system",
-        content: `
-أنت "مجيب" — مساعد ذكي موريتاني محترم.
-تتحدث العربية الفصحى البسيطة فقط.
-تكون مختصرًا وواضحًا وترد فقط على حسب السؤال بدون أي إضافات زائدة.
-ممنوع تمامًا استخدام كلمة "ok" أو "OK" أو أي ترجمة لها مثل "حسنًا" أو "تمام" في أي رد.
-إذا كان السؤال خارج النطاق أو غير مفهوم، قل بأدب أنك لم تفهم.
-        `
-      },
-      { role: "user", content: messageBody }
-    ];
+    const longRes = await axios.get(longLivedUrl);
+    const longLivedToken = longRes.data?.access_token || shortLivedToken;
+    const expiresIn = longRes.data?.expires_in || null;
 
-    const groqResp = await axios.post(
-      "https://api.groq.com/openai/v1/chat/completions",
-      {
-        model: "llama-3.1-8b-instant",
-        messages: systemPrompt,
-        max_tokens: 512,
-        temperature: 0.2
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${GROQ_API_KEY}`,
-          "Content-Type": "application/json"
-        },
-        timeout: 30000
-      }
+    // 3) Query Graph to find WhatsApp Business Account(s)
+    const fields = encodeURIComponent(
+      "businesses{whatsapp_business_accounts{phone_numbers,id}}"
     );
+    const whoUrl = `https://graph.facebook.com/v16.0/me?fields=${fields}&access_token=${encodeURIComponent(
+      longLivedToken
+    )}`;
+    const whoRes = await axios.get(whoUrl);
+    const businesses = whoRes.data?.businesses || [];
 
-    const aiContent =
-      groqResp.data?.choices?.[0]?.message?.content ||
-      groqResp.data?.choices?.[0]?.text ||
-      "";
-
-    let reply = sanitizeReply(aiContent);
-    if (isBadReply(reply)) {
-      console.warn("⚠️ الرد غير مقبول من AI أو قصير جداً، سيتم استخدام رد احتياطي.");
-      reply = "عذرًا، لم أتمكن من توليد رد مناسب الآن. هل يمكنك إعادة صياغة السؤال؟";
-    }
-
-    await client.messages.create({
-      from: "whatsapp:+14155238886",
-      to: from,
-      body: reply.substring(0, 1600)
-    });
-
-    console.log("✅ تم إرسال الرد:", reply);
-    return res.sendStatus(200);
-  } catch (err) {
-    console.error("❌ خطأ في المعالجة:", err.response?.data || err.message || err);
-    try {
-      if (req.body?.From) {
-        await client.messages.create({
-          from: "whatsapp:+14155238886",
-          to: req.body.From,
-          body: "⚠️ عذرًا، واجهنا مشكلة تقنية مؤقتة. الرجاء المحاولة لاحقًا."
-        });
+    let waAccountId = null;
+    let phoneNumber = null;
+    for (const b of businesses.data || businesses) {
+      const wbas = b?.whatsapp_business_accounts || [];
+      for (const w of wbas.data || wbas) {
+        waAccountId = w.id || waAccountId;
+        if (w.phone_numbers?.data?.length) {
+          phoneNumber = w.phone_numbers.data[0]?.phone_number || phoneNumber;
+        }
       }
-    } catch (twErr) {
-      console.error("❌ خطأ أثناء محاولة إرسال رسالة الخطأ:", twErr);
     }
-    return res.sendStatus(500);
+
+    // 4) Save to Firestore
+    const integration = {
+      access_token: longLivedToken,
+      expires_in: expiresIn,
+      whatsapp_business_account_id: waAccountId,
+      phone_number: phoneNumber,
+      linkedAt: new Date().toISOString(),
+    };
+
+    if (state) {
+      await saveIntegration(state, integration);
+      console.log("✅ Saved integration for uid=", state);
+    } else {
+      console.log("⚠️ No state provided; not saving to user doc.");
+    }
+
+    // 5) Redirect back to frontend
+    return res.redirect(`${process.env.FRONTEND_URL || "/"}?connected=1`);
+  } catch (err) {
+    console.error(
+      "⚠️ OAuth callback error:",
+      err.response?.data || err.message || err
+    );
+    return res.status(500).send("OAuth error — check server logs");
   }
 });
 
-// ✅ نقطة تحقق جديدة وآمنة — لا تؤثر على النظام إطلاقًا
-app.get("/status", (req, res) => {
-  res.json({
-    connected: true,
-    message: "Mujeeb is connected to Twilio Sandbox ✅"
-  });
+// ✅ NEW: test endpoint to view saved Meta token
+app.get("/auth/token", async (req, res) => {
+  try {
+    const uid = req.query.uid;
+    if (!uid) return res.status(400).json({ error: "Missing uid" });
+    if (!firestore)
+      return res
+        .status(500)
+        .json({ error: "Firestore not initialized on this server" });
+
+    const ref = firestore
+      .collection("users")
+      .doc(uid)
+      .collection("integrations")
+      .doc("meta");
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(404).json({ error: "No token found" });
+    return res.json(snap.data());
+  } catch (err) {
+    console.error("❌ Error fetching token:", err);
+    return res.status(500).json({ error: err.message });
+  }
 });
 
-// ✅ Meta Webhook Verification (WhatsApp Cloud API)
+// --- Webhook verification ---
 app.get("/webhook", (req, res) => {
-  const verifyToken = "mujeeb_test"; // نفس التوكن الذي تضعه في Meta
-
+  const verifyToken = process.env.META_VERIFY_TOKEN || "mujeeb_test";
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
-
   if (mode && token) {
     if (mode === "subscribe" && token === verifyToken) {
       console.log("✅ Webhook verified successfully with Meta");
-      res.status(200).send(challenge);
+      return res.status(200).send(challenge);
     } else {
-      console.warn("❌ Webhook verification failed. Invalid token.");
-      res.sendStatus(403);
+      return res.sendStatus(403);
     }
-  } else {
-    res.sendStatus(400);
   }
+  return res.sendStatus(400);
 });
 
-// ✅ استقبال الرسائل من Meta (POST Webhook)
-app.post("/webhook", (req, res) => {
-  console.log("📩 Webhook received from Meta:");
-  console.log(JSON.stringify(req.body, null, 2));
-  res.sendStatus(200); // ضروري ترجع 200 حتى لا يعتبره Meta فشل
+// --- Receive webhooks (messages) ---
+app.post("/webhook", async (req, res) => {
+  console.log("📩 Webhook received from Meta:", JSON.stringify(req.body, null, 2));
+  res.sendStatus(200);
+});
+
+app.get("/status", (req, res) => {
+  res.json({ ok: true, msg: "Mujeeb OAuth backend running" });
 });
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`🚀 Mujeeb server is running on port ${PORT}`);
+  console.log(`🚀 Mujeeb OAuth server listening on ${PORT}`);
+});
+// 🔹 Test Firestore connectivity
+app.get("/test-firestore", async (req, res) => {
+  try {
+    if (!firestore) {
+      return res.status(500).json({ success: false, message: "Firestore not initialized" });
+    }
+
+    const testRef = firestore.collection("_test").doc("connectivity-check");
+    const testData = { timestamp: new Date().toISOString(), message: "Hello from Mujeeb backend!" };
+
+    // Write test data
+    await testRef.set(testData);
+
+    // Read it back
+    const doc = await testRef.get();
+
+    if (!doc.exists) {
+      throw new Error("Document not found after write");
+    }
+
+    return res.json({
+      success: true,
+      message: "✅ Firestore connection successful!",
+      data: doc.data(),
+    });
+  } catch (err) {
+    console.error("⚠️ Firestore test error:", err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
 });
