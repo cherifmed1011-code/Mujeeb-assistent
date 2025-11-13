@@ -4,7 +4,6 @@ import dotenv from "dotenv";
 import bodyParser from "body-parser";
 import axios from "axios";
 import cors from "cors";
-import admin from "firebase-admin";
 import "./auth.js";
 
 dotenv.config();
