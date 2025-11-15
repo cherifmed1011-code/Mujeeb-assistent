@@ -4,7 +4,7 @@ import dotenv from "dotenv";
 import bodyParser from "body-parser";
 import axios from "axios";
 import cors from "cors";
-import admin from "firebase-admin"; // 🔥 مهم جداً
+import admin from "firebase-admin";
 
 dotenv.config();
 const app = express();
@@ -14,10 +14,11 @@ app.use(bodyParser.json());
 
 const PORT = process.env.PORT || 10000;
 
-// --- Meta / OAuth environment variables ---
+// --- Environment Variables ---
 const META_APP_ID = process.env.META_APP_ID;
 const META_APP_SECRET = process.env.META_APP_SECRET;
 const REDIRECT_URI = process.env.REDIRECT_URI;
+
 const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID;
 const FIREBASE_CLIENT_EMAIL = process.env.FIREBASE_CLIENT_EMAIL;
 const FIREBASE_PRIVATE_KEY =
@@ -26,13 +27,14 @@ const FIREBASE_PRIVATE_KEY =
 
 // --- Firebase Admin initialization ---
 let firestore = null;
+
 if (FIREBASE_PROJECT_ID && FIREBASE_CLIENT_EMAIL && FIREBASE_PRIVATE_KEY) {
   try {
     admin.initializeApp({
       credential: admin.credential.cert({
         projectId: FIREBASE_PROJECT_ID,
         clientEmail: FIREBASE_CLIENT_EMAIL,
-        privateKey: FIREBASE_PRIVATE_KEY,
+        privateKey: FIREBASE_PRIVATE_KEY, // ← الآن يحتوي على replace
       }),
     });
 
@@ -45,7 +47,7 @@ if (FIREBASE_PROJECT_ID && FIREBASE_CLIENT_EMAIL && FIREBASE_PRIVATE_KEY) {
   console.log("⚠️ Firestore not configured — tokens won't be saved.");
 }
 
-// --- Helper: Save OAuth tokens ---
+// --- Save Integration to Firestore ---
 async function saveIntegration(uid, data) {
   if (!firestore || !uid) return;
 
@@ -70,21 +72,18 @@ app.get("/", (req, res) => {
   res.json({ status: "Mujeeb OAuth backend running" });
 });
 
-// Start OAuth
+// OAuth start
 app.get("/auth/start", (req, res) => {
   const uid = req.query.uid || "";
-  const state = uid;
+  const redirect = encodeURIComponent(REDIRECT_URI);
 
   const scope = encodeURIComponent(
     "whatsapp_business_management,whatsapp_business_messaging,pages_show_list"
   );
 
-  const redirect = encodeURIComponent(REDIRECT_URI);
-  const oauthUrl = `https://www.facebook.com/v16.0/dialog/oauth?client_id=${META_APP_ID}&redirect_uri=${redirect}&state=${encodeURIComponent(
-    state
-  )}&scope=${scope}&response_type=code`;
+  const oauthUrl = `https://www.facebook.com/v16.0/dialog/oauth?client_id=${META_APP_ID}&redirect_uri=${redirect}&state=${uid}&scope=${scope}&response_type=code`;
 
-  return res.redirect(oauthUrl);
+  res.redirect(oauthUrl);
 });
 
 // OAuth callback
@@ -95,36 +94,27 @@ app.get("/auth/callback", async (req, res) => {
 
     if (!code) return res.status(400).send("Missing code");
 
-    // 1) Exchange for short-lived token
-    const tokenUrl =
-      `https://graph.facebook.com/v16.0/oauth/access_token` +
-      `?client_id=${META_APP_ID}` +
-      `&client_secret=${META_APP_SECRET}` +
-      `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
-      `&code=${encodeURIComponent(code)}`;
-
-    const shortRes = await axios.get(tokenUrl);
-    const shortToken = shortRes.data?.access_token;
-
-    if (!shortToken) throw new Error("Failed to get access token");
-
-    // 2) Exchange for long-lived token
-    const longUrl =
-      `https://graph.facebook.com/v16.0/oauth/access_token` +
-      `?grant_type=fb_exchange_token&client_id=${META_APP_ID}` +
-      `&client_secret=${META_APP_SECRET}` +
-      `&fb_exchange_token=${encodeURIComponent(shortToken)}`;
-
-    const longRes = await axios.get(longUrl);
-    const longToken = longRes.data?.access_token || shortToken;
-
-    // 3) Get WhatsApp Business account
-    const fields = encodeURIComponent(
-      "businesses{whatsapp_business_accounts{phone_numbers,id}}"
+    // 1) Short-lived token
+    const shortRes = await axios.get(
+      `https://graph.facebook.com/v16.0/oauth/access_token?client_id=${META_APP_ID}&client_secret=${META_APP_SECRET}&redirect_uri=${encodeURIComponent(
+        REDIRECT_URI
+      )}&code=${encodeURIComponent(code)}`
     );
 
-    const whoUrl = `https://graph.facebook.com/v16.0/me?fields=${fields}&access_token=${longToken}`;
-    const whoRes = await axios.get(whoUrl);
+    const shortToken = shortRes.data?.access_token;
+    if (!shortToken) throw new Error("Failed to get access token");
+
+    // 2) Long-lived token
+    const longRes = await axios.get(
+      `https://graph.facebook.com/v16.0/oauth/access_token?grant_type=fb_exchange_token&client_id=${META_APP_ID}&client_secret=${META_APP_SECRET}&fb_exchange_token=${shortToken}`
+    );
+
+    const longToken = longRes.data?.access_token || shortToken;
+
+    // 3) WhatsApp Business account
+    const whoRes = await axios.get(
+      `https://graph.facebook.com/v16.0/me?fields=businesses{whatsapp_business_accounts{phone_numbers,id}}&access_token=${longToken}`
+    );
 
     let waAccountId = null;
     let phoneNumber = null;
@@ -141,7 +131,6 @@ app.get("/auth/callback", async (req, res) => {
       }
     }
 
-    // Save to Firestore
     if (state) {
       await saveIntegration(state, {
         access_token: longToken,
@@ -152,14 +141,14 @@ app.get("/auth/callback", async (req, res) => {
       console.log("✅ Saved integration for UID:", state);
     }
 
-    return res.redirect(`${process.env.FRONTEND_URL || "/"}?connected=1`);
+    res.redirect(`${process.env.FRONTEND_URL || "/"}?connected=1`);
   } catch (err) {
     console.error("OAuth error:", err.response?.data || err);
-    return res.status(500).send("OAuth failed");
+    res.status(500).send("OAuth failed");
   }
 });
 
-// Get token
+// Fetch stored token
 app.get("/auth/token", async (req, res) => {
   try {
     const uid = req.query.uid;
@@ -176,34 +165,34 @@ app.get("/auth/token", async (req, res) => {
     const snap = await ref.get();
     if (!snap.exists) return res.status(404).send({ error: "No token found" });
 
-    return res.json(snap.data());
+    res.json(snap.data());
   } catch (err) {
     console.error("Token error:", err);
-    return res.status(500).send({ error: err.message });
+    res.status(500).send({ error: err.message });
   }
 });
 
-// Webhook verification
+// Webhook verify
 app.get("/webhook", (req, res) => {
   const verifyToken = process.env.META_VERIFY_TOKEN || "mujeeb_test";
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
 
-  if (mode && token && mode === "subscribe" && token === verifyToken) {
+  if (mode === "subscribe" && token === verifyToken) {
     return res.status(200).send(challenge);
   }
 
-  return res.sendStatus(403);
+  res.sendStatus(403);
 });
 
-// Actual webhook receiver
+// Webhook receive
 app.post("/webhook", (req, res) => {
   console.log("📩 Webhook:", JSON.stringify(req.body, null, 2));
   res.sendStatus(200);
 });
 
-// Test Firestore
+// Firestore test
 app.get("/test-firestore", async (req, res) => {
   try {
     if (!firestore)
@@ -218,16 +207,17 @@ app.get("/test-firestore", async (req, res) => {
 
     const snap = await ref.get();
 
-    return res.json({
+    res.json({
       success: true,
       data: snap.data(),
     });
   } catch (err) {
     console.error("Firestore test error:", err);
-    return res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
+// Start server
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Mujeeb OAuth server running on ${PORT}`);
 });
