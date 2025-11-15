@@ -39,7 +39,18 @@ if (FIREBASE_PROJECT_ID && FIREBASE_CLIENT_EMAIL && FIREBASE_PRIVATE_KEY) {
     });
 
     firestore = admin.firestore();
-    console.log("🔥 Firestore initialized successfully!");
+console.log("🔥 Firestore initialized successfully!");
+
+// =========================
+// TEST FIRESTORE WRITE
+// =========================
+const testRef = firestore.collection("test").doc("check");
+testRef
+  .set({ time: Date.now() })
+  .then(() => console.log("🔥 Firestore TEST WRITE: SUCCESS"))
+  .catch((err) =>
+    console.error("❌ Firestore TEST WRITE ERROR:", err.message || err)
+  );
   } catch (err) {
     console.error("❌ Firebase init error:", err);
   }
