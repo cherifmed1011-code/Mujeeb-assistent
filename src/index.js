@@ -1,4 +1,5 @@
 // backend/src/index.js
+
 import express from "express";
 import dotenv from "dotenv";
 import bodyParser from "body-parser";
@@ -7,6 +8,10 @@ import cors from "cors";
 import admin from "firebase-admin";
 
 dotenv.config();
+
+// =========================
+// Express setup
+// =========================
 const app = express();
 app.use(cors());
 app.use(bodyParser.urlencoded({ extended: false }));
@@ -14,7 +19,9 @@ app.use(bodyParser.json());
 
 const PORT = process.env.PORT || 10000;
 
-// --- Environment Variables ---
+// =========================
+// Environment Variables
+// =========================
 const META_APP_ID = process.env.META_APP_ID;
 const META_APP_SECRET = process.env.META_APP_SECRET;
 const REDIRECT_URI = process.env.REDIRECT_URI;
@@ -25,7 +32,9 @@ const FIREBASE_PRIVATE_KEY =
   process.env.FIREBASE_PRIVATE_KEY &&
   process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n");
 
-// --- Firebase Admin initialization ---
+// =========================
+// Firebase Admin initialization
+// =========================
 let firestore = null;
 
 if (FIREBASE_PROJECT_ID && FIREBASE_CLIENT_EMAIL && FIREBASE_PRIVATE_KEY) {
@@ -34,23 +43,21 @@ if (FIREBASE_PROJECT_ID && FIREBASE_CLIENT_EMAIL && FIREBASE_PRIVATE_KEY) {
       credential: admin.credential.cert({
         projectId: FIREBASE_PROJECT_ID,
         clientEmail: FIREBASE_CLIENT_EMAIL,
-        privateKey: FIREBASE_PRIVATE_KEY, // ← الآن يحتوي على replace
+        privateKey: FIREBASE_PRIVATE_KEY,
       }),
     });
 
     firestore = admin.firestore();
-console.log("🔥 Firestore initialized successfully!");
+    console.log("🔥 Firestore initialized successfully!");
 
-// =========================
-// TEST FIRESTORE WRITE
-// =========================
-const testRef = firestore.collection("test").doc("check");
-testRef
-  .set({ time: Date.now() })
-  .then(() => console.log("🔥 Firestore TEST WRITE: SUCCESS"))
-  .catch((err) =>
-    console.error("❌ Firestore TEST WRITE ERROR:", err.message || err)
-  );
+    // Firestore test write
+    const testRef = firestore.collection("test").doc("check");
+    testRef
+      .set({ time: Date.now() })
+      .then(() => console.log("🔥 Firestore TEST WRITE: SUCCESS"))
+      .catch((err) =>
+        console.error("❌ Firestore TEST WRITE ERROR:", err.message || err)
+      );
   } catch (err) {
     console.error("❌ Firebase init error:", err);
   }
@@ -58,7 +65,9 @@ testRef
   console.log("⚠️ Firestore not configured — tokens won't be saved.");
 }
 
-// --- Save Integration to Firestore ---
+// =========================
+// Save WhatsApp Integration to Firestore
+// =========================
 async function saveIntegration(uid, data) {
   if (!firestore || !uid) return;
 
@@ -105,7 +114,7 @@ app.get("/auth/callback", async (req, res) => {
 
     if (!code) return res.status(400).send("Missing code");
 
-    // 1) Short-lived token
+    // Short-lived token
     const shortRes = await axios.get(
       `https://graph.facebook.com/v16.0/oauth/access_token?client_id=${META_APP_ID}&client_secret=${META_APP_SECRET}&redirect_uri=${encodeURIComponent(
         REDIRECT_URI
@@ -115,14 +124,14 @@ app.get("/auth/callback", async (req, res) => {
     const shortToken = shortRes.data?.access_token;
     if (!shortToken) throw new Error("Failed to get access token");
 
-    // 2) Long-lived token
+    // Long-lived token
     const longRes = await axios.get(
       `https://graph.facebook.com/v16.0/oauth/access_token?grant_type=fb_exchange_token&client_id=${META_APP_ID}&client_secret=${META_APP_SECRET}&fb_exchange_token=${shortToken}`
     );
 
     const longToken = longRes.data?.access_token || shortToken;
 
-    // 3) WhatsApp Business account
+    // WhatsApp Business data
     const whoRes = await axios.get(
       `https://graph.facebook.com/v16.0/me?fields=businesses{whatsapp_business_accounts{phone_numbers,id}}&access_token=${longToken}`
     );
@@ -131,7 +140,6 @@ app.get("/auth/callback", async (req, res) => {
     let phoneNumber = null;
 
     const businesses = whoRes.data?.businesses || [];
-
     for (const b of businesses) {
       const wbas = b?.whatsapp_business_accounts || [];
       for (const w of wbas) {
@@ -142,6 +150,7 @@ app.get("/auth/callback", async (req, res) => {
       }
     }
 
+    // Save to Firestore
     if (state) {
       await saveIntegration(state, {
         access_token: longToken,
@@ -159,7 +168,7 @@ app.get("/auth/callback", async (req, res) => {
   }
 });
 
-// Fetch stored token
+// Fetch stored WhatsApp token
 app.get("/auth/token", async (req, res) => {
   try {
     const uid = req.query.uid;
@@ -203,7 +212,7 @@ app.post("/webhook", (req, res) => {
   res.sendStatus(200);
 });
 
-// Firestore test
+// Firestore test route
 app.get("/test-firestore", async (req, res) => {
   try {
     if (!firestore)
@@ -217,18 +226,16 @@ app.get("/test-firestore", async (req, res) => {
     });
 
     const snap = await ref.get();
-
-    res.json({
-      success: true,
-      data: snap.data(),
-    });
+    res.json({ success: true, data: snap.data() });
   } catch (err) {
     console.error("Firestore test error:", err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
+// =========================
 // Start server
+// =========================
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Mujeeb OAuth server running on ${PORT}`);
 });
