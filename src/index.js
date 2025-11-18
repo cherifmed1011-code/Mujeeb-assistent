@@ -192,7 +192,9 @@ app.get("/auth/token", async (req, res) => {
   }
 });
 
-// Webhook verify
+// =========================
+// Webhook verify (needed by Meta)
+// =========================
 app.get("/webhook", (req, res) => {
   const verifyToken = process.env.META_VERIFY_TOKEN || "mujeeb_test";
   const mode = req.query["hub.mode"];
@@ -206,13 +208,58 @@ app.get("/webhook", (req, res) => {
   res.sendStatus(403);
 });
 
-// Webhook receive
-app.post("/webhook", (req, res) => {
-  console.log("📩 Webhook:", JSON.stringify(req.body, null, 2));
-  res.sendStatus(200);
+// =========================
+// Webhook receive (FINAL VERSION)
+// =========================
+app.post("/webhook", async (req, res) => {
+  try {
+    const body = req.body;
+
+    if (
+      body.object === "whatsapp_business_account" &&
+      body.entry &&
+      body.entry[0].changes &&
+      body.entry[0].changes[0].value.messages
+    ) {
+      const change = body.entry[0].changes[0].value;
+      const message = change.messages[0];
+
+      const from = message.from;
+      const userMessage = message.text?.body || "";
+      const phoneNumberId = change.metadata.phone_number_id;
+
+      console.log("📩 رسالة واردة:", userMessage);
+
+      const WA_TOKEN = process.env.WHATSAPP_TOKEN;
+
+      await axios.post(
+        `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
+        {
+          messaging_product: "whatsapp",
+          to: from,
+          text: { body: `تم استلام رسالتك: ${userMessage}` },
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${WA_TOKEN}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      console.log("✅ تم إرسال الرد");
+    }
+
+    res.sendStatus(200);
+  } catch (err) {
+    console.error("❌ Webhook error:", err.response?.data || err);
+    res.sendStatus(500);
+  }
 });
 
+// =========================
 // Firestore test route
+// =========================
 app.get("/test-firestore", async (req, res) => {
   try {
     if (!firestore)
