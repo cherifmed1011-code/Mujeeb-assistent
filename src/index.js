@@ -25,9 +25,10 @@ const PORT = process.env.PORT || 10000;
 const META_APP_ID = process.env.META_APP_ID;
 const META_APP_SECRET = process.env.META_APP_SECRET;
 const REDIRECT_URI = process.env.REDIRECT_URI;
-const META_WA_TOKEN = process.env.META_PERMANENT_TOKEN;
+const META_PERMANENT_TOKEN = process.env.META_PERMANENT_TOKEN;
 const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID;
 const FIREBASE_CLIENT_EMAIL = process.env.FIREBASE_CLIENT_EMAIL;
+
 const FIREBASE_PRIVATE_KEY =
   process.env.FIREBASE_PRIVATE_KEY &&
   process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n");
@@ -48,25 +49,16 @@ if (FIREBASE_PROJECT_ID && FIREBASE_CLIENT_EMAIL && FIREBASE_PRIVATE_KEY) {
     });
 
     firestore = admin.firestore();
-    console.log("🔥 Firestore initialized successfully!");
-
-    // Firestore test write
-    const testRef = firestore.collection("test").doc("check");
-    testRef
-      .set({ time: Date.now() })
-      .then(() => console.log("🔥 Firestore TEST WRITE: SUCCESS"))
-      .catch((err) =>
-        console.error("❌ Firestore TEST WRITE ERROR:", err.message || err)
-      );
+    console.log("🔥 Firestore initialized");
   } catch (err) {
     console.error("❌ Firebase init error:", err);
   }
 } else {
-  console.log("⚠️ Firestore not configured — tokens won't be saved.");
+  console.log("⚠️ Firestore not configured.");
 }
 
 // =========================
-// Save WhatsApp Integration to Firestore
+// Helpers – Save Integration
 // =========================
 async function saveIntegration(uid, data) {
   if (!firestore || !uid) return;
@@ -141,11 +133,11 @@ app.get("/auth/callback", async (req, res) => {
 
     const businesses = whoRes.data?.businesses || [];
     for (const b of businesses) {
-      const wbas = b?.whatsapp_business_accounts || [];
+      const wbas = b.whatsapp_business_accounts || [];
       for (const w of wbas) {
         waAccountId = w.id;
         if (w.phone_numbers?.length) {
-          phoneNumber = w.phone_numbers[0]?.phone_number;
+          phoneNumber = w.phone_numbers[0].phone_number;
         }
       }
     }
@@ -161,14 +153,14 @@ app.get("/auth/callback", async (req, res) => {
       console.log("✅ Saved integration for UID:", state);
     }
 
-    res.redirect(`${process.env.FRONTEND_URL || "/"}?connected=1`);
+    res.redirect(`${process.env.FRONTEND_URL}?connected=1`);
   } catch (err) {
     console.error("OAuth error:", err.response?.data || err);
     res.status(500).send("OAuth failed");
   }
 });
 
-// Fetch stored WhatsApp token
+// Get stored token
 app.get("/auth/token", async (req, res) => {
   try {
     const uid = req.query.uid;
@@ -187,16 +179,16 @@ app.get("/auth/token", async (req, res) => {
 
     res.json(snap.data());
   } catch (err) {
-    console.error("Token error:", err);
     res.status(500).send({ error: err.message });
   }
 });
 
 // =========================
-// Webhook verify (needed by Meta)
+// Webhook verify
 // =========================
 app.get("/webhook", (req, res) => {
-  const verifyToken = process.env.META_VERIFY_TOKEN || "mujeeb_test";
+  const verifyToken = process.env.META_VERIFY_TOKEN;
+
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
@@ -209,7 +201,7 @@ app.get("/webhook", (req, res) => {
 });
 
 // =========================
-// Webhook receive (FINAL VERSION)
+// Webhook receive (FINAL)
 // =========================
 app.post("/webhook", async (req, res) => {
   try {
@@ -217,31 +209,28 @@ app.post("/webhook", async (req, res) => {
 
     if (
       body.object === "whatsapp_business_account" &&
-      body.entry &&
-      body.entry[0].changes &&
-      body.entry[0].changes[0].value.messages
+      body.entry?.[0].changes?.[0].value.messages
     ) {
-      const change = body.entry[0].changes[0].value;
-      const message = change.messages[0];
+      const value = body.entry[0].changes[0].value;
+      const message = value.messages?.[0];
 
       const from = message.from;
-      const userMessage = message.text?.body || "";
-      const phoneNumberId = change.metadata.phone_number_id;
+      const text = message.text?.body || "";
+      const phoneNumberId = value.metadata.phone_number_id;
 
-      console.log("📩 رسالة واردة:", userMessage);
+      console.log("📩 رسالة واردة:", text);
 
-      const WA_TOKEN = process.env.WHATSAPP_TOKEN;
-
+      // ALWAYS use the permanent token
       await axios.post(
         `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
         {
           messaging_product: "whatsapp",
           to: from,
-          text: { body: `تم استلام رسالتك: ${userMessage}` },
+          text: { body: `تم استلام رسالتك: ${text}` },
         },
         {
           headers: {
-            Authorization: `Bearer ${WA_TOKEN}`,
+            Authorization: `Bearer ${META_PERMANENT_TOKEN}`,
             "Content-Type": "application/json",
           },
         }
@@ -254,29 +243,6 @@ app.post("/webhook", async (req, res) => {
   } catch (err) {
     console.error("❌ Webhook error:", err.response?.data || err);
     res.sendStatus(500);
-  }
-});
-
-// =========================
-// Firestore test route
-// =========================
-app.get("/test-firestore", async (req, res) => {
-  try {
-    if (!firestore)
-      return res.status(500).json({ success: false, message: "Firestore inactive" });
-
-    const ref = firestore.collection("_test").doc("connectivity-check");
-
-    await ref.set({
-      timestamp: new Date().toISOString(),
-      message: "Hello from backend",
-    });
-
-    const snap = await ref.get();
-    res.json({ success: true, data: snap.data() });
-  } catch (err) {
-    console.error("Firestore test error:", err);
-    res.status(500).json({ success: false, error: err.message });
   }
 });
 
