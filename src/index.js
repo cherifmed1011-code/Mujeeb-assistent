@@ -5,7 +5,6 @@ import dotenv from "dotenv";
 import bodyParser from "body-parser";
 import axios from "axios";
 import cors from "cors";
-import admin from "firebase-admin";
 
 dotenv.config();
 
@@ -22,60 +21,26 @@ const PORT = process.env.PORT || 10000;
 // =========================
 // Environment Variables
 // =========================
-const META_APP_ID = process.env.META_APP_ID;
-const META_APP_SECRET = process.env.META_APP_SECRET;
-const REDIRECT_URI = process.env.REDIRECT_URI;
-const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID;
-const FIREBASE_CLIENT_EMAIL = process.env.FIREBASE_CLIENT_EMAIL;
-const FIREBASE_PRIVATE_KEY =
-  process.env.FIREBASE_PRIVATE_KEY &&
-  process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n");
-
-const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN; // <-- الوحيد الذي نستخدمه
+const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN; // ← التوكن الوحيد المستخدم
+const META_VERIFY_TOKEN = process.env.META_VERIFY_TOKEN || "mujeeb_test";
 
 // =========================
-// Firebase Admin initialization
-// =========================
-let firestore = null;
-
-if (FIREBASE_PROJECT_ID && FIREBASE_CLIENT_EMAIL && FIREBASE_PRIVATE_KEY) {
-  try {
-    admin.initializeApp({
-      credential: admin.credential.cert({
-        projectId: FIREBASE_PROJECT_ID,
-        clientEmail: FIREBASE_CLIENT_EMAIL,
-        privateKey: FIREBASE_PRIVATE_KEY,
-      }),
-    });
-
-    firestore = admin.firestore();
-    console.log("🔥 Firestore initialized successfully!");
-  } catch (err) {
-    console.error("❌ Firebase init error:", err);
-  }
-} else {
-  console.log("⚠️ Firestore not configured — tokens won't be saved.");
-}
-
-// =========================
-// Routes
-// =========================
-
 // Health check
+// =========================
 app.get("/", (req, res) => {
   res.json({ status: "Mujeeb backend running" });
 });
 
 // =========================
-// Webhook verify (needed by Meta)
+// Webhook verify (Meta requirement)
 // =========================
 app.get("/webhook", (req, res) => {
-  const verifyToken = process.env.META_VERIFY_TOKEN || "mujeeb_test";
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
 
-  if (mode === "subscribe" && token === verifyToken) {
+  if (mode === "subscribe" && token === META_VERIFY_TOKEN) {
+    console.log("Webhook verified successfully!");
     return res.status(200).send(challenge);
   }
 
@@ -83,7 +48,7 @@ app.get("/webhook", (req, res) => {
 });
 
 // =========================
-// Webhook receive
+// Webhook receiver
 // =========================
 app.post("/webhook", async (req, res) => {
   try {
@@ -103,10 +68,9 @@ app.post("/webhook", async (req, res) => {
       const phoneNumberId = change.metadata.phone_number_id;
 
       console.log("📩 واردة:", userMessage);
+      console.log("📞 phone_number_id المستلم:", phoneNumberId);
 
-      // -------------------------
-      // إرسال الرد عبر WHATSAPP_TOKEN
-      // -------------------------
+      // إرسال الرد
       await axios.post(
         `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
         {
@@ -122,7 +86,7 @@ app.post("/webhook", async (req, res) => {
         }
       );
 
-      console.log("✅ تم إرسال الرد");
+      console.log("✅ تم إرسال الرد للمستخدم");
     }
 
     res.sendStatus(200);
