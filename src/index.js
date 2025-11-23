@@ -21,8 +21,9 @@ const PORT = process.env.PORT || 10000;
 // =========================
 // Environment Variables
 // =========================
-const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN; // ← التوكن الوحيد المستخدم
+const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const META_VERIFY_TOKEN = process.env.META_VERIFY_TOKEN || "mujeeb_test";
+const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID; // ← تم الإضافة
 
 // =========================
 // Health check
@@ -40,10 +41,11 @@ app.get("/webhook", (req, res) => {
   const challenge = req.query["hub.challenge"];
 
   if (mode === "subscribe" && token === META_VERIFY_TOKEN) {
-    console.log("Webhook verified successfully!");
+    console.log("✅ Webhook verified successfully!");
     return res.status(200).send(challenge);
   }
 
+  console.log("❌ Webhook verification failed");
   res.sendStatus(403);
 });
 
@@ -54,45 +56,119 @@ app.post("/webhook", async (req, res) => {
   try {
     const body = req.body;
 
+    console.log("📨 Received webhook:", JSON.stringify(body, null, 2));
+
+    // التحقق من أن الطلب من واتساب ويحتوي على رسائل
     if (
       body.object === "whatsapp_business_account" &&
       body.entry &&
       body.entry[0].changes &&
-      body.entry[0].changes[0].value.messages
+      body.entry[0].changes[0].value.messages &&
+      body.entry[0].changes[0].value.messages[0]
     ) {
       const change = body.entry[0].changes[0].value;
       const message = change.messages[0];
 
       const from = message.from;
       const userMessage = message.text?.body || "";
-      const phoneNumberId = change.metadata.phone_number_id;
+      const messageType = message.type;
 
       console.log("📩 واردة:", userMessage);
-      console.log("📞 phone_number_id المستلم:", phoneNumberId);
+      console.log("📞 من الرقم:", from);
+      console.log("🔤 نوع الرسالة:", messageType);
 
-      // إرسال الرد
-      await axios.post(
-        `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
-        {
-          messaging_product: "whatsapp",
-          to: from,
-          text: { body: `تم استلام رسالتك: ${userMessage}` },
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-            "Content-Type": "application/json",
+      // التحقق من وجود جميع المتطلبات
+      if (!WHATSAPP_PHONE_NUMBER_ID) {
+        console.error("❌ WHATSAPP_PHONE_NUMBER_ID غير محدد في البيئة");
+        return res.sendStatus(200);
+      }
+
+      if (!WHATSAPP_TOKEN) {
+        console.error("❌ WHATSAPP_TOKEN غير محدد في البيئة");
+        return res.sendStatus(200);
+      }
+
+      // إرسال الرد فقط إذا كانت الرسالة نصية
+      if (messageType === "text") {
+        await axios.post(
+          `https://graph.facebook.com/v19.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`, // ← استخدام الثابت
+          {
+            messaging_product: "whatsapp",
+            to: from,
+            text: { 
+              body: `مرحباً! تم استلام رسالتك: "${userMessage}"
+              
+شكراً للتواصل معنا! 🙏` 
+            },
           },
-        }
-      );
+          {
+            headers: {
+              Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+              "Content-Type": "application/json",
+            },
+            timeout: 10000, // 10 ثواني
+          }
+        );
 
-      console.log("✅ تم إرسال الرد للمستخدم");
+        console.log("✅ تم إرسال الرد للمستخدم");
+      }
+    } else {
+      console.log("ℹ️  استلام ويب هوك بدون رسالة نصية (قد يكون تسليم أو قراءة)");
     }
 
     res.sendStatus(200);
   } catch (err) {
-    console.error("❌ Webhook error:", err.response?.data || err);
-    res.sendStatus(500);
+    console.error("❌ Webhook error:", err.response?.data || err.message);
+    
+    // طباعة تفاصيل أكثر للمساعدة في التشخيص
+    if (err.response) {
+      console.error("📊 تفاصيل الخطأ:", {
+        status: err.response.status,
+        statusText: err.response.statusText,
+        data: err.response.data
+      });
+    }
+    
+    res.sendStatus(200); // إرجاع 200 حتى لا تعيد ميتا المحاولة
+  }
+});
+
+// =========================
+// Test endpoint لإرسال رسالة
+// =========================
+app.post("/test-send", async (req, res) => {
+  try {
+    const { to, message } = req.body;
+
+    if (!to || !message) {
+      return res.status(400).json({ 
+        error: "المعطيات الناقصة: to و message مطلوبين" 
+      });
+    }
+
+    const response = await axios.post(
+      `https://graph.facebook.com/v19.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`,
+      {
+        messaging_product: "whatsapp",
+        to: to,
+        text: { body: message },
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    console.log("✅ رسالة اختبار مرسلة:", response.data);
+    res.json({ success: true, data: response.data });
+  } catch (error) {
+    console.error("❌ خطأ في إرسال رسالة الاختبار:", error.response?.data || error.message);
+    res.status(500).json({ 
+      error: "فشل إرسال الرسالة",
+      details: error.response?.data || error.message 
+    });
   }
 });
 
@@ -101,4 +177,9 @@ app.post("/webhook", async (req, res) => {
 // =========================
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Mujeeb server running on port ${PORT}`);
+  console.log(`🔧 Config:`, {
+    hasToken: !!WHATSAPP_TOKEN,
+    hasPhoneNumberId: !!WHATSAPP_PHONE_NUMBER_ID,
+    verifyToken: META_VERIFY_TOKEN
+  });
 });
