@@ -23,13 +23,80 @@ const PORT = process.env.PORT || 10000;
 // =========================
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const META_VERIFY_TOKEN = process.env.META_VERIFY_TOKEN || "mujeeb_test";
-const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID; // ← تم الإضافة
+const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
+const GROQ_API_KEY = process.env.GROQ_API_KEY; // ← إضافة جديدة
+
+// =========================
+// الذكاء الاصطناعي باستخدام GROQ
+// =========================
+async function getAIResponse(userMessage, userPhone) {
+  try {
+    // إذا ما في API Key، استخدم رد افتراضي
+    if (!GROQ_API_KEY) {
+      return `مرحباً! شكراً على رسالتك: "${userMessage}". كيف يمكنني مساعدتك؟`;
+    }
+
+    const response = await axios.post(
+      'https://api.groq.com/openai/v1/chat/completions',
+      {
+        model: "llama-3.1-8b-instant",
+        messages: [
+          {
+            role: "system",
+            content: `أنت مساعد واتساب ذكي اسمك "مجيب". 
+            - رد باللغة العربية الفصحى أو العامية حسب سياق الرسالة
+            - كن ودوداً ومفيداً
+            - الردود مختصرة (سطرين أو ثلاثة)
+            - لا تقدم معلومات طبية أو قانونية خطيرة
+            - إذا لم تفهم السؤال، اطلب توضيحاً بلطف
+            
+            المستخدم: ${userPhone}
+            الرسالة: ${userMessage}`
+          },
+          {
+            role: "user",
+            content: userMessage
+          }
+        ],
+        max_tokens: 200,
+        temperature: 0.7
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${GROQ_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 10000
+      }
+    );
+
+    const aiResponse = response.data.choices[0].message.content;
+    console.log("🤖 رد الذكاء الاصطناعي:", aiResponse);
+    return aiResponse;
+
+  } catch (error) {
+    console.error("❌ خطأ في الذكاء الاصطناعي:", error.response?.data || error.message);
+    
+    // رد افتراضي في حالة الخطأ
+    return `أهلاً بك! شكراً للتواصل معنا. 
+    
+رسالتك: "${userMessage}"
+    
+كيف يمكنني مساعدتك؟ 😊`;
+  }
+}
 
 // =========================
 // Health check
 // =========================
 app.get("/", (req, res) => {
-  res.json({ status: "Mujeeb backend running" });
+  res.json({ 
+    status: "Mujeeb backend running",
+    features: {
+      ai: !!GROQ_API_KEY,
+      whatsapp: !!WHATSAPP_TOKEN
+    }
+  });
 });
 
 // =========================
@@ -50,7 +117,7 @@ app.get("/webhook", (req, res) => {
 });
 
 // =========================
-// Webhook receiver
+// Webhook receiver - محدث مع الذكاء الاصطناعي
 // =========================
 app.post("/webhook", async (req, res) => {
   try {
@@ -90,15 +157,17 @@ app.post("/webhook", async (req, res) => {
 
       // إرسال الرد فقط إذا كانت الرسالة نصية
       if (messageType === "text") {
+        
+        // ✅ الحصول على رد ذكي من AI
+        const aiResponse = await getAIResponse(userMessage, from);
+        
         await axios.post(
-          `https://graph.facebook.com/v19.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`, // ← استخدام الثابت
+          `https://graph.facebook.com/v19.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`,
           {
             messaging_product: "whatsapp",
             to: from,
             text: { 
-              body: `مرحباً! تم استلام رسالتك: "${userMessage}"
-              
-شكراً للتواصل معنا! 🙏` 
+              body: aiResponse
             },
           },
           {
@@ -106,11 +175,11 @@ app.post("/webhook", async (req, res) => {
               Authorization: `Bearer ${WHATSAPP_TOKEN}`,
               "Content-Type": "application/json",
             },
-            timeout: 10000, // 10 ثواني
+            timeout: 10000,
           }
         );
 
-        console.log("✅ تم إرسال الرد للمستخدم");
+        console.log("🤖 تم إرسال الرد الذكي للمستخدم");
       }
     } else {
       console.log("ℹ️  استلام ويب هوك بدون رسالة نصية (قد يكون تسليم أو قراءة)");
@@ -120,7 +189,6 @@ app.post("/webhook", async (req, res) => {
   } catch (err) {
     console.error("❌ Webhook error:", err.response?.data || err.message);
     
-    // طباعة تفاصيل أكثر للمساعدة في التشخيص
     if (err.response) {
       console.error("📊 تفاصيل الخطأ:", {
         status: err.response.status,
@@ -129,7 +197,7 @@ app.post("/webhook", async (req, res) => {
       });
     }
     
-    res.sendStatus(200); // إرجاع 200 حتى لا تعيد ميتا المحاولة
+    res.sendStatus(200);
   }
 });
 
@@ -173,6 +241,35 @@ app.post("/test-send", async (req, res) => {
 });
 
 // =========================
+// Test endpoint للذكاء الاصطناعي
+// =========================
+app.post("/test-ai", async (req, res) => {
+  try {
+    const { message } = req.body;
+
+    if (!message) {
+      return res.status(400).json({ 
+        error: "الرسالة مطلوبة" 
+      });
+    }
+
+    const aiResponse = await getAIResponse(message, "test-user");
+    
+    res.json({ 
+      success: true, 
+      original: message,
+      ai_response: aiResponse 
+    });
+  } catch (error) {
+    console.error("❌ خطأ في اختبار الذكاء الاصطناعي:", error.message);
+    res.status(500).json({ 
+      error: "فشل في معالجة الرسالة",
+      details: error.message 
+    });
+  }
+});
+
+// =========================
 // Start server
 // =========================
 app.listen(PORT, "0.0.0.0", () => {
@@ -180,6 +277,7 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log(`🔧 Config:`, {
     hasToken: !!WHATSAPP_TOKEN,
     hasPhoneNumberId: !!WHATSAPP_PHONE_NUMBER_ID,
+    hasAI: !!GROQ_API_KEY,
     verifyToken: META_VERIFY_TOKEN
   });
 });
