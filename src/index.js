@@ -24,18 +24,21 @@ const PORT = process.env.PORT || 10000;
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const META_VERIFY_TOKEN = process.env.META_VERIFY_TOKEN || "mujeeb_test";
 const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
-const GROQ_API_KEY = process.env.GROQ_API_KEY; // ← إضافة جديدة
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
 // =========================
-// الذكاء الاصطناعي باستخدام GROQ
+// الذكاء الاصطناعي باستخدام GROQ - نسخة مبسطة
 // =========================
 async function getAIResponse(userMessage, userPhone) {
   try {
     // إذا ما في API Key، استخدم رد افتراضي
     if (!GROQ_API_KEY) {
+      console.log("🤖 استخدام الرد الافتراضي (لا يوجد GROQ_API_KEY)");
       return `مرحباً! شكراً على رسالتك: "${userMessage}". كيف يمكنني مساعدتك؟`;
     }
 
+    console.log("🤖 جلب رد من الذكاء الاصطناعي...");
+    
     const response = await axios.post(
       'https://api.groq.com/openai/v1/chat/completions',
       {
@@ -43,22 +46,14 @@ async function getAIResponse(userMessage, userPhone) {
         messages: [
           {
             role: "system",
-            content: `أنت مساعد واتساب ذكي اسمك "مجيب". 
-            - رد باللغة العربية الفصحى أو العامية حسب سياق الرسالة
-            - كن ودوداً ومفيداً
-            - الردود مختصرة (سطرين أو ثلاثة)
-            - لا تقدم معلومات طبية أو قانونية خطيرة
-            - إذا لم تفهم السؤال، اطلب توضيحاً بلطف
-            
-            المستخدم: ${userPhone}
-            الرسالة: ${userMessage}`
+            content: "أنت مساعد واتساب ذكي. رد باللغة العربية بطريقة ودودة ومفيدة."
           },
           {
-            role: "user",
+            role: "user", 
             content: userMessage
           }
         ],
-        max_tokens: 200,
+        max_tokens: 150,
         temperature: 0.7
       },
       {
@@ -75,7 +70,7 @@ async function getAIResponse(userMessage, userPhone) {
     return aiResponse;
 
   } catch (error) {
-    console.error("❌ خطأ في الذكاء الاصطناعي:", error.response?.data || error.message);
+    console.error("❌ خطأ في الذكاء الاصطناعي:", error.message);
     
     // رد افتراضي في حالة الخطأ
     return `أهلاً بك! شكراً للتواصل معنا. 
@@ -122,8 +117,6 @@ app.get("/webhook", (req, res) => {
 app.post("/webhook", async (req, res) => {
   try {
     const body = req.body;
-
-    console.log("📨 Received webhook:", JSON.stringify(body, null, 2));
 
     // التحقق من أن الطلب من واتساب ويحتوي على رسائل
     if (
@@ -182,21 +175,12 @@ app.post("/webhook", async (req, res) => {
         console.log("🤖 تم إرسال الرد الذكي للمستخدم");
       }
     } else {
-      console.log("ℹ️  استلام ويب هوك بدون رسالة نصية (قد يكون تسليم أو قراءة)");
+      console.log("ℹ️  استلام ويب هوك بدون رسالة نصية");
     }
 
     res.sendStatus(200);
   } catch (err) {
-    console.error("❌ Webhook error:", err.response?.data || err.message);
-    
-    if (err.response) {
-      console.error("📊 تفاصيل الخطأ:", {
-        status: err.response.status,
-        statusText: err.response.statusText,
-        data: err.response.data
-      });
-    }
-    
+    console.error("❌ Webhook error:", err.message);
     res.sendStatus(200);
   }
 });
@@ -232,45 +216,16 @@ app.post("/test-send", async (req, res) => {
     console.log("✅ رسالة اختبار مرسلة:", response.data);
     res.json({ success: true, data: response.data });
   } catch (error) {
-    console.error("❌ خطأ في إرسال رسالة الاختبار:", error.response?.data || error.message);
+    console.error("❌ خطأ في إرسال رسالة الاختبار:", error.message);
     res.status(500).json({ 
       error: "فشل إرسال الرسالة",
-      details: error.response?.data || error.message 
-    });
-  }
-});
-
-// =========================
-// Test endpoint للذكاء الاصطناعي
-// =========================
-app.post("/test-ai", async (req, res) => {
-  try {
-    const { message } = req.body;
-
-    if (!message) {
-      return res.status(400).json({ 
-        error: "الرسالة مطلوبة" 
-      });
-    }
-
-    const aiResponse = await getAIResponse(message, "test-user");
-    
-    res.json({ 
-      success: true, 
-      original: message,
-      ai_response: aiResponse 
-    });
-  } catch (error) {
-    console.error("❌ خطأ في اختبار الذكاء الاصطناعي:", error.message);
-    res.status(500).json({ 
-      error: "فشل في معالجة الرسالة",
       details: error.message 
     });
   }
 });
 
 // =========================
-// Start server
+// Start server - النسخة المبسطة
 // =========================
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Mujeeb server running on port ${PORT}`);
