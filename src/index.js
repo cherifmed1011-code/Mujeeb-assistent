@@ -28,7 +28,7 @@ const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
 // =========================
-// Firebase Init (خطوة 1 و 2 تعتمد عليه)
+// Firebase Init
 // =========================
 let firestore = null;
 
@@ -56,7 +56,7 @@ if (
 }
 
 // =========================
-// AI (بدون تعديل)
+// AI
 // =========================
 async function getAIResponse(userMessage, userPhone) {
   try {
@@ -109,7 +109,7 @@ app.get("/webhook", (req, res) => {
 });
 
 // =========================
-// Webhook receiver (مضاف خطوة 1 و 2)
+// Webhook receiver + حفظ متعدد المستويات (A + B)
 // =========================
 app.post("/webhook", async (req, res) => {
   try {
@@ -125,43 +125,81 @@ app.post("/webhook", async (req, res) => {
       const change = body.entry[0].changes[0].value;
       const message = change.messages[0];
 
-      const from = message.from;          // رقم المستخدم (نستخدمه كـ userId)
+      const from = message.from;
       const userMessage = message.text?.body || "";
       const messageType = message.type;
 
       console.log("📩 واردة:", userMessage);
       console.log("📞 من:", from);
 
-      // =========================
-      // (1) تعيين userId = رقم الهاتف
-      // =========================
       const userId = from;
 
-      // =========================
-      // (2) حفظ المحادثة في Firestore
-      // =========================
+      // ===========================================================
+      //  A — إنشاء users/{userId}/messages لكل مستخدم
+      // ===========================================================
+      if (firestore) {
+        await firestore
+          .collection("users")
+          .doc(userId)
+          .collection("messages")
+          .add({
+            from: "user",
+            message: userMessage,
+            timestamp: new Date().toISOString(),
+          });
+      }
+
+      // ===========================================================
+      //  B — حفظ آخر رسالة للمستخدم في users/{userId}
+      // ===========================================================
+      if (firestore) {
+        await firestore
+          .collection("users")
+          .doc(userId)
+          .set(
+            {
+              lastMessage: userMessage,
+              lastMessageTime: new Date().toISOString(),
+            },
+            { merge: true }
+          );
+      }
+
+      // (الحفظ القديم — بدون حذف)
       if (firestore) {
         await firestore.collection("messages").add({
           userId,
           from: "user",
           message: userMessage,
-          timestamp: new Date().toISOString()
+          timestamp: new Date().toISOString(),
         });
-
-        console.log("💾 تم حفظ الرسالة في Firestore");
+        console.log("💾 تم حفظ الرسالة في Firestore (global messages)");
       }
 
-      // الرد فقط على الرسائل النصية
+      // الرد
       if (messageType === "text") {
         const aiResponse = await getAIResponse(userMessage, from);
 
-        // حفظ رد الذكاء الاصطناعي
+        // حفظ رد الذكاء الاصطناعي في users/{userId}/messages
+        if (firestore) {
+          await firestore
+            .collection("users")
+            .doc(userId)
+            .collection("messages")
+            .add({
+              from: "bot",
+              message: aiResponse,
+              timestamp: new Date().toISOString(),
+            });
+        }
+
+        // حفظ الرد في collection القديم
         if (firestore) {
           await firestore.collection("messages").add({
             userId,
             from: "bot",
             message: aiResponse,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
           });
         }
 
