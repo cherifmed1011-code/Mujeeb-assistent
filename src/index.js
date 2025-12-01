@@ -6,6 +6,7 @@ import bodyParser from "body-parser";
 import axios from "axios";
 import cors from "cors";
 import admin from "firebase-admin";
+import jwt from "jsonwebtoken"; // ⬅ إضافة مهمة
 
 dotenv.config();
 
@@ -109,7 +110,7 @@ app.get("/webhook", (req, res) => {
 });
 
 // =========================
-// Webhook receiver + حفظ متعدد المستويات (A + B)
+// Webhook receiver
 // =========================
 app.post("/webhook", async (req, res) => {
   try {
@@ -134,9 +135,6 @@ app.post("/webhook", async (req, res) => {
 
       const userId = from;
 
-      // ===========================================================
-      //  A — إنشاء users/{userId}/messages لكل مستخدم
-      // ===========================================================
       if (firestore) {
         await firestore
           .collection("users")
@@ -149,9 +147,6 @@ app.post("/webhook", async (req, res) => {
           });
       }
 
-      // ===========================================================
-      //  B — حفظ آخر رسالة للمستخدم في users/{userId}
-      // ===========================================================
       if (firestore) {
         await firestore
           .collection("users")
@@ -165,7 +160,6 @@ app.post("/webhook", async (req, res) => {
           );
       }
 
-      // (الحفظ القديم — بدون حذف)
       if (firestore) {
         await firestore.collection("messages").add({
           userId,
@@ -176,11 +170,9 @@ app.post("/webhook", async (req, res) => {
         console.log("💾 تم حفظ الرسالة في Firestore (global messages)");
       }
 
-      // الرد
       if (messageType === "text") {
         const aiResponse = await getAIResponse(userMessage, from);
 
-        // حفظ رد الذكاء الاصطناعي في users/{userId}/messages
         if (firestore) {
           await firestore
             .collection("users")
@@ -193,7 +185,6 @@ app.post("/webhook", async (req, res) => {
             });
         }
 
-        // حفظ الرد في collection القديم
         if (firestore) {
           await firestore.collection("messages").add({
             userId,
@@ -203,7 +194,6 @@ app.post("/webhook", async (req, res) => {
           });
         }
 
-        // إرسال الرد
         await axios.post(
           `https://graph.facebook.com/v19.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`,
           {
@@ -229,6 +219,67 @@ app.post("/webhook", async (req, res) => {
   } catch (err) {
     console.error("❌ Webhook error:", err.message);
     res.sendStatus(200);
+  }
+});
+
+// =========================
+// AUTH Middleware
+// =========================
+function authenticateUser(req, res, next) {
+  try {
+    const token = req.query.token;
+    if (!token) return res.status(401).send("Missing token");
+
+    const decoded = jwt.decode(token);
+    if (!decoded) return res.status(401).send("Invalid token");
+
+    req.user = decoded;
+    next();
+  } catch (err) {
+    return res.status(401).send("Auth error");
+  }
+}
+
+// =========================
+// OAuth: Connect WhatsApp
+// =========================
+app.get("/connect/whatsapp", authenticateUser, (req, res) => {
+  try {
+    const redirect = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${process.env.META_APP_ID}&redirect_uri=${process.env.META_REDIRECT_URI}&scope=whatsapp_business_management,whatsapp_business_messaging`;
+
+    res.redirect(redirect);
+  } catch (err) {
+    console.log("Connect error:", err.message);
+    res.status(500).send("Connect failed");
+  }
+});
+
+app.get("/connect/whatsapp/callback", async (req, res) => {
+  try {
+    const code = req.query.code;
+    if (!code) return res.send("No code received");
+
+    const tokenResponse = await axios.get(
+      `https://graph.facebook.com/v19.0/oauth/access_token`,
+      {
+        params: {
+          client_id: process.env.META_APP_ID,
+          client_secret: process.env.META_APP_SECRET,
+          redirect_uri: process.env.META_REDIRECT_URI,
+          code,
+        },
+      }
+    );
+
+    return res.send(`
+      <script>
+        window.opener.postMessage({ status: "success" }, "*");
+        window.close();
+      </script>
+    `);
+  } catch (err) {
+    console.log("Callback error:", err.message);
+    return res.send("Callback failed");
   }
 });
 
